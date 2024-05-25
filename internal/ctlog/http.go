@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -160,10 +161,9 @@ func (l *Log) addChainOrPreChain(ctx context.Context, reqBody io.ReadCloser, che
 		var preIssuer *x509.Certificate
 		if ct.IsPreIssuer(issuers[0]) {
 			preIssuer = issuers[0]
-			issuers = issuers[1:]
 			labels["preissuer"] = "true"
 			labels["issuer"] = x509util.NameToString(preIssuer.Issuer)
-			if len(issuers) == 0 {
+			if len(issuers) == 1 {
 				l.c.Log.WarnContext(ctx, "missing precertificate signing certificate issuer", "err", err, "body", body)
 				return nil, http.StatusBadRequest, fmtErrorf("missing precertificate signing certificate issuer")
 			}
@@ -190,7 +190,7 @@ func (l *Log) addChainOrPreChain(ctx context.Context, reqBody io.ReadCloser, che
 	var newIssuers bool
 	l.issuersMu.RLock()
 	for _, issuer := range issuers {
-		if !l.issuers.Included(issuer) {
+		if _, exists := l.issuers[sha256.Sum256(issuer.Raw)]; !exists {
 			l.c.Log.InfoContext(ctx, "new issuer", "issuer", x509util.NameToString(issuer.Subject))
 			newIssuers = true
 		}
@@ -250,26 +250,36 @@ func (l *Log) uploadIssuers(ctx context.Context, issuers []*x509.Certificate) er
 	l.issuersMu.Lock()
 	defer l.issuersMu.Unlock()
 
-	oldCount := len(l.issuers.RawCertificates())
 	for _, issuer := range issuers {
-		l.issuers.AddCert(issuer)
-	}
+		fingerprint := sha256.Sum256(issuer.Raw)
+		if _, exists := l.issuers[fingerprint]; !exists {
+			key := "issuers/" + hex.EncodeToString(fingerprint[:])
 
-	pemIssuers := &bytes.Buffer{}
-	for _, c := range l.issuers.RawCertificates() {
-		if err := pem.Encode(pemIssuers, &pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: c.Raw,
-		}); err != nil {
-			return err
+			exists, err := l.c.Backend.Exists(ctx, key)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				pemIssuers := &bytes.Buffer{}
+				if err := pem.Encode(pemIssuers, &pem.Block{
+					Type:  "CERTIFICATE",
+					Bytes: issuer.Raw,
+				}); err != nil {
+					return err
+				}
+
+				err := l.c.Backend.Upload(ctx, key, pemIssuers.Bytes(), optsPem)
+				l.c.Log.InfoContext(ctx, "uploaded issuer", "fingerprint", key, "err", err)
+				if err != nil {
+					return err
+				}
+			}
+			l.issuers[fingerprint] = struct{}{}
+			l.m.Issuers.Inc()
 		}
 	}
 
-	err := l.c.Backend.Upload(ctx, "issuers.pem", pemIssuers.Bytes(), optsText)
-	l.c.Log.InfoContext(ctx, "uploaded issuers", "size", pemIssuers.Len(),
-		"old", oldCount, "new", len(l.issuers.RawCertificates()), "err", err)
-	l.m.Issuers.Set(float64(len(l.issuers.RawCertificates())))
-	return err
+	return nil
 }
 
 func (l *Log) getRoots(rw http.ResponseWriter, r *http.Request) {

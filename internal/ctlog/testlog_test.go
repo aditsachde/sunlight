@@ -379,6 +379,16 @@ func (b *MemoryBackend) Fetch(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
+func (b *MemoryBackend) Exists(ctx context.Context, key string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.m[key]
+	return ok, nil
+}
+
 func (b *MemoryBackend) Metrics() []prometheus.Collector { return nil }
 
 type MemoryLockBackend struct {

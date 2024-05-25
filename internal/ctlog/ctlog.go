@@ -57,7 +57,7 @@ type Log struct {
 	cacheRead *sqlite.Conn
 
 	issuersMu sync.RWMutex
-	issuers   *x509util.PEMCertPool
+	issuers   map[[sha256.Size]byte]struct{}
 }
 
 type treeWithTimestamp struct {
@@ -114,10 +114,6 @@ func CreateLog(ctx context.Context, config *Config) error {
 	}
 	if err := cacheWrite.Close(); err != nil {
 		return fmt.Errorf("couldn't close cache database: %w", err)
-	}
-
-	if err := config.Backend.Upload(ctx, "issuers.pem", []byte{}, optsText); err != nil {
-		return fmt.Errorf("couldn't upload issuers.pem: %w", err)
 	}
 
 	timestamp := timeNowUnixMilli()
@@ -212,15 +208,7 @@ func LoadLog(ctx context.Context, config *Config) (*Log, error) {
 			"old_size", c1.N, "size", c.N)
 	}
 
-	pemIssuers, err := config.Backend.Fetch(ctx, "issuers.pem")
-	if err != nil {
-		return nil, fmt.Errorf("couldn't fetch issuers.pem: %w", err)
-	}
-	config.Log.DebugContext(ctx, "loaded issuers.pem", "pem", pemIssuers)
-	issuers := x509util.NewPEMCertPool()
-	if len(pemIssuers) > 0 && !issuers.AppendCertsFromPEM(pemIssuers) {
-		return nil, errors.New("invalid issuers.pem")
-	}
+	issuers := make(map[[sha256.Size]byte]struct{})
 
 	cacheRead, cacheWrite, err := initCache(config.Cache)
 	if err != nil {
@@ -280,12 +268,11 @@ func LoadLog(ctx context.Context, config *Config) (*Log, error) {
 	}
 
 	config.Log.InfoContext(ctx, "loaded log", "logID", base64.StdEncoding.EncodeToString(logID[:]),
-		"size", c.N, "timestamp", timestamp, "issuers", len(issuers.RawCertificates()))
+		"size", c.N, "timestamp", timestamp)
 
 	m := initMetrics()
 	m.TreeSize.Set(float64(c.N))
 	m.TreeTime.Set(float64(timestamp))
-	m.Issuers.Set(float64(len(issuers.RawCertificates())))
 	m.ConfigRoots.Set(float64(len(config.Roots.RawCertificates())))
 	m.ConfigStart.Set(float64(config.NotAfterStart.Unix()))
 	m.ConfigEnd.Set(float64(config.NotAfterLimit.Unix()))
@@ -319,6 +306,9 @@ type Backend interface {
 	// uploaded with UploadOptions.Compress true.
 	Fetch(ctx context.Context, key string) ([]byte, error)
 
+	// Exists can be called concrrently. It checks if the key exists on the backend.
+	Exists(ctx context.Context, key string) (bool, error)
+
 	// Metrics returns the metrics to register for this log. The metrics should
 	// not be shared by any other logs.
 	Metrics() []prometheus.Collector
@@ -340,6 +330,7 @@ type UploadOptions struct {
 var optsHashTile = &UploadOptions{Immutable: true}
 var optsDataTile = &UploadOptions{Compress: true, Immutable: true}
 var optsText = &UploadOptions{ContentType: "text/plain; charset=utf-8"}
+var optsPem = &UploadOptions{ContentType: "text/plain; charset=utf-8", Immutable: true}
 
 // A LockBackend is a database that supports compare-and-swap operations.
 //
