@@ -27,10 +27,10 @@ type LogEntry struct {
 	// It must be at most 2^24-1 bytes long.
 	PreCertificate []byte
 
-	// PrecertSigningCert is the Precertificate Signing Certificate, if any, as
-	// represented in the first entry of PrecertChainEntry.precertificate_chain.
-	// It may be nil, and must be at most 2^24-1 bytes long.
-	PrecertSigningCert []byte
+	// ChainFp is a slice of the fingerprints of the entries
+	// in the chain submitted the add-chain or add-pre-chain endpoints,
+	// excluding the first element, with the original order maintained.
+	ChainFp [][32]byte
 
 	// LeafIndex is the zero-based index of the leaf in the log.
 	// It must be between 0 and 2^40-1.
@@ -68,12 +68,14 @@ func (e *LogEntry) MerkleTreeLeaf() []byte {
 //         case x509_entry: Empty;
 //         case precert_entry: PreCertExtraData;
 //     } extra_data;
+//     Fingerprint chain<0..2^8-1>;
 // } TileLeaf;
 //
 // struct {
 //     ASN.1Cert pre_certificate;
-//     opaque PrecertificateSigningCertificate<0..2^24-1>;
 // } PreCertExtraData;
+//
+// opaque Fingerprint[32];
 
 // ReadTileLeaf reads a LogEntry from a data tile, and returns the remaining
 // data in the tile.
@@ -98,13 +100,28 @@ func ReadTileLeaf(tile []byte) (e *LogEntry, rest []byte, err error) {
 		if !s.CopyBytes(e.IssuerKeyHash[:]) ||
 			!s.ReadUint24LengthPrefixed((*cryptobyte.String)(&e.Certificate)) ||
 			!s.ReadUint16LengthPrefixed(&extensions) ||
-			!s.ReadUint24LengthPrefixed((*cryptobyte.String)(&e.PreCertificate)) ||
-			!s.ReadUint24LengthPrefixed((*cryptobyte.String)(&e.PrecertSigningCert)) {
+			!s.ReadUint24LengthPrefixed((*cryptobyte.String)(&e.PreCertificate)) {
 			return nil, s, fmt.Errorf("invalid data tile precert_entry")
 		}
 	default:
 		return nil, s, fmt.Errorf("invalid data tile: unknown type %d", entryType)
 	}
+
+	// look at first byte to determine the length of the chain
+	var fingerprintCount uint8
+	if !s.ReadUint8(&fingerprintCount) {
+		return nil, s, fmt.Errorf("invalid data tile precert_entry")
+	}
+	// then, try to read out that many fingerprints
+	e.ChainFp = make([][32]byte, 0, fingerprintCount)
+	for i := uint8(0); i < fingerprintCount; i++ {
+		var fingerprint [32]byte
+		if !s.CopyBytes(fingerprint[:]) {
+			return nil, s, fmt.Errorf("invalid data tile precert_entry")
+		}
+		e.ChainFp = append(e.ChainFp, fingerprint)
+	}
+
 	var extensionType uint8
 	var extensionData cryptobyte.String
 	if !extensions.ReadUint8(&extensionType) || extensionType != 0 ||
@@ -137,10 +154,13 @@ func AppendTileLeaf(t []byte, e *LogEntry) []byte {
 		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
 			b.AddBytes(e.PreCertificate)
 		})
-		b.AddUint24LengthPrefixed(func(b *cryptobyte.Builder) {
-			b.AddBytes(e.PrecertSigningCert)
-		})
 	}
+	// TODO: add chain
+	b.AddUint8(uint8(len(e.ChainFp)))
+	for _, fingerprint := range e.ChainFp {
+		b.AddBytes(fingerprint[:])
+	}
+
 	return b.BytesOrPanic()
 }
 
