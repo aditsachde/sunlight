@@ -261,25 +261,6 @@ func main() {
 		logger.Error("only one of Checkpoints, DynamoDB, or ETagS3 can be set at the same time")
 		os.Exit(1)
 
-	case c.Checkpoints != "":
-		b, err := ctlog.NewSQLiteBackend(ctx, c.Checkpoints, logger)
-		if err != nil {
-			logger.Error("failed to create SQLite checkpoint backend", "err", err)
-			os.Exit(1)
-		}
-		sunlightMetrics.MustRegister(b.Metrics()...)
-		db = b
-
-	case c.DynamoDB.Table != "":
-		b, err := ctlog.NewDynamoDBBackend(ctx,
-			c.DynamoDB.Region, c.DynamoDB.Table, c.DynamoDB.Endpoint, logger)
-		if err != nil {
-			logger.Error("failed to create DynamoDB backend", "err", err)
-			os.Exit(1)
-		}
-		sunlightMetrics.MustRegister(b.Metrics()...)
-		db = b
-
 	case c.ETagS3.Bucket != "":
 		b, err := ctlog.NewETagBackend(ctx,
 			c.ETagS3.Region, c.ETagS3.Bucket, c.ETagS3.Endpoint, logger)
