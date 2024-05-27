@@ -16,6 +16,9 @@ type LogEntry struct {
 	// It must be at most 2^24-1 bytes long.
 	Certificate []byte
 
+	// CertificateFp is the fingerprint of the first element of the chain
+	CertificateFp [32]byte
+
 	// IsPrecert is true if LogEntryType is precert_entry. Otherwise, the
 	// following three fields are zero and ignored.
 	IsPrecert bool

@@ -389,6 +389,7 @@ func (r *tileReader) SaveTiles(tiles []tlog.Tile, data [][]byte) { r.saveTiles(t
 // so doesn't have an index or timestamp.
 type PendingLogEntry struct {
 	Certificate    []byte
+	CertificateFp  [32]byte
 	IsPrecert      bool
 	IssuerKeyHash  [32]byte
 	PreCertificate []byte
@@ -398,6 +399,7 @@ type PendingLogEntry struct {
 func (e *PendingLogEntry) asLogEntry(idx, timestamp int64) *sunlight.LogEntry {
 	return &sunlight.LogEntry{
 		Certificate:    e.Certificate,
+		CertificateFp:  e.CertificateFp,
 		IsPrecert:      e.IsPrecert,
 		IssuerKeyHash:  e.IssuerKeyHash,
 		PreCertificate: e.PreCertificate,
@@ -613,6 +615,9 @@ func (l *Log) sequencePool(ctx context.Context, p *pool) (err error) {
 		}
 
 		n++
+
+		// TODO: There are some further notes on the PutHash function on why this is wrong
+		g.Go(func() error { return l.PutHash(ctx, sha256.Sum256(leaf.CertificateFp[:]), uint64(leaf.LeafIndex)) })
 
 		// If the data tile is full, upload it.
 		if n%sunlight.TileWidth == 0 {

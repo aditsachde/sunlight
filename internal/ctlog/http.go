@@ -147,6 +147,7 @@ func (l *Log) addChainOrPreChain(ctx context.Context, reqBody io.ReadCloser, che
 	labels["issuer"] = x509util.NameToString(chain[0].Issuer)
 
 	e := &PendingLogEntry{Certificate: chain[0].Raw}
+	e.CertificateFp = sha256.Sum256(chain[0].Raw)
 	issuers := chain[1:]
 	if isPrecert, err := ctfe.IsPrecertificate(chain[0]); err != nil {
 		l.c.Log.WarnContext(ctx, "invalid precertificate", "err", err, "body", body)
